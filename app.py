@@ -1,13 +1,13 @@
 import streamlit as st
 import pandas as pd
 import json
-import time
+from datetime import datetime
 from groq import Groq
 
 # 1. 頁面配置
 st.set_page_config(page_title="言論審核系統", layout="wide")
 
-# 2. 自定義 CSS
+# 2. 自定義 CSS (保持不變)
 st.markdown(
     """
     <style>
@@ -19,6 +19,7 @@ st.markdown(
         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         background-color: #ffffff;
     }
+    /* 顏色樣式 (透明背景 + 實色邊框) */
     .card-T { 
         border-left-color: #ff4b4b !important; 
         background-color: rgba(255, 75, 75, 0.1) !important; 
@@ -34,7 +35,6 @@ st.markdown(
     
     .post-text { font-size: 1.15em; line-height: 1.6; color: #1a1a1b; margin-top: 8px; }
     .id-badge { font-family: monospace; color: #555; background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 0.85em; margin-right: 5px; }
-    /* 新增：原始類別標籤樣式 */
     .tag-badge { font-family: sans-serif; color: #fff; background: #6c757d; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; }
     </style>
 """,
@@ -45,7 +45,7 @@ st.markdown(
 if "df" not in st.session_state:
     st.session_state.df = None
 
-# 4. 側邊欄
+# 4. 側邊欄：設定與匯出
 with st.sidebar:
     st.title("⚙️ 系統設定")
     try:
@@ -57,27 +57,41 @@ with st.sidebar:
         "輸入 Groq API Key",
         value=default_key,
         type="password",
-        help="如果此處為空，請輸入你的 Key 以啟用 AI 功能",
     )
 
     st.divider()
     st.header("💾 匯出結果")
     if st.session_state.df is not None:
-        csv_data = st.session_state.df.to_csv(index=False, encoding="utf-8-sig")
+        # --- 處理匯出邏輯 ---
+        export_df = st.session_state.df.copy()
+
+        # 1. 取得當前時間並新增「匯出時間」欄位
+        current_time = datetime.now()
+        export_df["export_time"] = current_time.strftime("%Y-%m-%d %H:%M:%S")
+
+        # 2. 生成檔名：原檔名 + _日期_時間
+        # 移除 .csv 副檔名取得原始名稱
+        base_name = st.session_state.original_filename.replace(".csv", "")
+        timestamp = current_time.strftime("%m%d_%H%M")
+        final_filename = f"{base_name}_{timestamp}.csv"
+
+        csv_data = export_df.to_csv(index=False, encoding="utf-8-sig")
+
         st.download_button(
             label="📥 匯出並下載結果 CSV",
             data=csv_data,
-            file_name="Audit_Result.csv",
+            file_name=final_filename,
             mime="text/csv",
             use_container_width=True,
         )
+        st.info(f"💡 檔名將存為: {final_filename}")
 
 # 5. 主畫面
 st.title("🛡️ 學生言論安全審核系統")
 uploaded_file = st.file_uploader("上傳待審核 CSV (支援續作)", type=["csv"])
 
 
-# AI 核心邏輯 (不變)
+# AI 核心邏輯 (保持不變)
 def ai_analyze(text, key):
     client = Groq(api_key=key)
     system_ins = 'You are a student safety analyst. Output ONLY JSON: {"target": "T/N/Optional", "subcategory": "H/E/S/V/C/D/""}'
@@ -100,7 +114,11 @@ def ai_analyze(text, key):
 # 6. 資料處理
 if uploaded_file:
     if st.session_state.df is None:
+        # 記錄原始檔名供匯出使用
+        st.session_state.original_filename = uploaded_file.name
+
         df = pd.read_csv(uploaded_file, encoding="utf-8-sig", dtype=str)
+        # 確保 target 與 subcategory 欄位存在
         for col in ["target", "subcategory"]:
             if col not in df.columns:
                 df[col] = ""
@@ -108,14 +126,13 @@ if uploaded_file:
 
     df = st.session_state.df
 
+    # 批量分析按鈕 (保持不變)
     if st.button("🚀 執行 AI 自動預測 (僅針對未標籤項)"):
         if not user_api_key:
             st.warning("請先在左側輸入 API Key 才能執行 AI 分析！")
         else:
             todo_list = df[~df["target"].isin(["T", "N", "Optional"])].index
-            if len(todo_list) == 0:
-                st.info("目前沒有需要 AI 分析的項目。")
-            else:
+            if len(todo_list) > 0:
                 pbar = st.progress(0)
                 for idx, i in enumerate(todo_list):
                     t, s = ai_analyze(df.at[i, "cleaned_text"], user_api_key)
@@ -128,7 +145,7 @@ if uploaded_file:
 
     st.divider()
 
-    # 7. 渲染卡片
+    # 7. 渲染卡片 (保持不變)
     for i in range(len(df)):
         cur_t = df.at[i, "target"]
         card_class = ""
@@ -141,10 +158,8 @@ if uploaded_file:
 
         with st.container():
             st.markdown(f'<div class="post-card {card_class}">', unsafe_allow_html=True)
-
             c1, c2 = st.columns([4, 1])
             with c1:
-                # 組合 ID 與 原始分類 (subCategories)
                 raw_tags = (
                     df.at[i, "subCategories"] if "subCategories" in df.columns else ""
                 )
@@ -153,7 +168,6 @@ if uploaded_file:
                     if pd.notna(raw_tags) and raw_tags != ""
                     else ""
                 )
-
                 st.markdown(
                     f'<div><span class="id-badge">ID: {df.at[i, "_id"]}</span>{tag_html}</div>',
                     unsafe_allow_html=True,
@@ -171,7 +185,6 @@ if uploaded_file:
                     index=t_opts.index(cur_t) if cur_t in t_opts else 0,
                     key=f"t_{i}",
                 )
-
                 s_opts = ["", "H", "E", "S", "V", "C", "D"]
                 cur_s = df.at[i, "subcategory"]
                 new_s = st.selectbox(
@@ -185,5 +198,4 @@ if uploaded_file:
                     st.session_state.df.at[i, "target"] = new_t
                     st.session_state.df.at[i, "subcategory"] = new_s
                     st.rerun()
-
             st.markdown("</div>", unsafe_allow_html=True)
