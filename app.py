@@ -7,7 +7,7 @@ from groq import Groq
 # 1. 頁面配置
 st.set_page_config(page_title="言論審核系統", layout="wide")
 
-# 2. 自定義 CSS (保持不變)
+# 2. 自定義 CSS (包含你要求的顏色樣式)
 st.markdown(
     """
     <style>
@@ -65,15 +65,16 @@ with st.sidebar:
         # --- 處理匯出邏輯 ---
         export_df = st.session_state.df.copy()
 
-        # 1. 取得當前時間並新增「匯出時間」欄位
-        current_time = datetime.now()
-        export_df["export_time"] = current_time.strftime("%Y-%m-%d %H:%M:%S")
+        # 取得當前時間並新增「匯出時間」欄位
+        now = datetime.now()
+        export_df["export_time"] = now.strftime("%Y-%m-%d %H:%M:%S")
 
-        # 2. 生成檔名：原檔名 + _日期_時間
-        # 移除 .csv 副檔名取得原始名稱
-        base_name = st.session_state.original_filename.replace(".csv", "")
-        timestamp = current_time.strftime("%m%d_%H%M")
-        final_filename = f"{base_name}_{timestamp}.csv"
+        # 生成檔名：原檔名 + _月日_時分
+        orig_name = st.session_state.get(
+            "original_filename", "Audit_Result.csv"
+        ).replace(".csv", "")
+        timestamp = now.strftime("%m%d_%H%M")
+        final_filename = f"{orig_name}_{timestamp}.csv"
 
         csv_data = export_df.to_csv(index=False, encoding="utf-8-sig")
 
@@ -84,14 +85,14 @@ with st.sidebar:
             mime="text/csv",
             use_container_width=True,
         )
-        st.info(f"💡 檔名將存為: {final_filename}")
+        st.info(f"💡 預覽檔名: {final_filename}")
 
 # 5. 主畫面
 st.title("🛡️ 學生言論安全審核系統")
 uploaded_file = st.file_uploader("上傳待審核 CSV (支援續作)", type=["csv"])
 
 
-# AI 核心邏輯 (保持不變)
+# AI 核心邏輯
 def ai_analyze(text, key):
     client = Groq(api_key=key)
     system_ins = 'You are a student safety analyst. Output ONLY JSON: {"target": "T/N/Optional", "subcategory": "H/E/S/V/C/D/""}'
@@ -114,11 +115,10 @@ def ai_analyze(text, key):
 # 6. 資料處理
 if uploaded_file:
     if st.session_state.df is None:
-        # 記錄原始檔名供匯出使用
+        # 關鍵點：在此記錄原始檔名
         st.session_state.original_filename = uploaded_file.name
 
         df = pd.read_csv(uploaded_file, encoding="utf-8-sig", dtype=str)
-        # 確保 target 與 subcategory 欄位存在
         for col in ["target", "subcategory"]:
             if col not in df.columns:
                 df[col] = ""
@@ -126,7 +126,6 @@ if uploaded_file:
 
     df = st.session_state.df
 
-    # 批量分析按鈕 (保持不變)
     if st.button("🚀 執行 AI 自動預測 (僅針對未標籤項)"):
         if not user_api_key:
             st.warning("請先在左側輸入 API Key 才能執行 AI 分析！")
@@ -145,7 +144,7 @@ if uploaded_file:
 
     st.divider()
 
-    # 7. 渲染卡片 (保持不變)
+    # 7. 渲染卡片
     for i in range(len(df)):
         cur_t = df.at[i, "target"]
         card_class = ""
