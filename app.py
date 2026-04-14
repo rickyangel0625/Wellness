@@ -1,13 +1,13 @@
 import streamlit as st
 import pandas as pd
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from groq import Groq
 
 # 1. 頁面配置
 st.set_page_config(page_title="言論審核系統", layout="wide")
 
-# 2. 自定義 CSS (包含你要求的顏色樣式)
+# 2. 自定義 CSS (包含顏色樣式與標籤美化)
 st.markdown(
     """
     <style>
@@ -65,15 +65,17 @@ with st.sidebar:
         # --- 處理匯出邏輯 ---
         export_df = st.session_state.df.copy()
 
-        # 取得當前時間並新增「匯出時間」欄位
-        now = datetime.now()
-        export_df["export_time"] = now.strftime("%Y-%m-%d %H:%M:%S")
+        # 修正：取得 UTC 時間並手動加 8 小時轉換為台灣時間
+        now_tw = datetime.utcnow() + timedelta(hours=8)
 
-        # 生成檔名：原檔名 + _月日_時分
+        # 使用台灣時間新增「匯出時間」欄位
+        export_df["export_time"] = now_tw.strftime("%Y-%m-%d %H:%M:%S")
+
+        # 使用台灣時間生成檔名：原檔名 + _月日_時分
         orig_name = st.session_state.get(
             "original_filename", "Audit_Result.csv"
         ).replace(".csv", "")
-        timestamp = now.strftime("%m%d_%H%M")
+        timestamp = now_tw.strftime("%m%d_%H%M")
         final_filename = f"{orig_name}_{timestamp}.csv"
 
         csv_data = export_df.to_csv(index=False, encoding="utf-8-sig")
@@ -115,9 +117,10 @@ def ai_analyze(text, key):
 # 6. 資料處理
 if uploaded_file:
     if st.session_state.df is None:
-        # 關鍵點：在此記錄原始檔名
+        # 記錄原始檔名
         st.session_state.original_filename = uploaded_file.name
 
+        # 讀取所有欄位，dtype=str 確保格式不跑掉且保留所有額外欄位
         df = pd.read_csv(uploaded_file, encoding="utf-8-sig", dtype=str)
         for col in ["target", "subcategory"]:
             if col not in df.columns:
@@ -184,6 +187,7 @@ if uploaded_file:
                     index=t_opts.index(cur_t) if cur_t in t_opts else 0,
                     key=f"t_{i}",
                 )
+
                 s_opts = ["", "H", "E", "S", "V", "C", "D"]
                 cur_s = df.at[i, "subcategory"]
                 new_s = st.selectbox(
