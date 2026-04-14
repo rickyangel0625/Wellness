@@ -7,7 +7,7 @@ from groq import Groq
 # 1. 頁面配置
 st.set_page_config(page_title="言論審核系統", layout="wide")
 
-# 2. 自定義 CSS：更美觀的透明背景色彩
+# 2. 自定義 CSS
 st.markdown(
     """
     <style>
@@ -19,7 +19,6 @@ st.markdown(
         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         background-color: #ffffff;
     }
-    /* 顏色樣式 (透明背景 + 實色邊框) */
     .card-T { 
         border-left-color: #ff4b4b !important; 
         background-color: rgba(255, 75, 75, 0.1) !important; 
@@ -34,7 +33,9 @@ st.markdown(
     }
     
     .post-text { font-size: 1.15em; line-height: 1.6; color: #1a1a1b; margin-top: 8px; }
-    .id-badge { font-family: monospace; color: #555; background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 0.85em; }
+    .id-badge { font-family: monospace; color: #555; background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 0.85em; margin-right: 5px; }
+    /* 新增：原始類別標籤樣式 */
+    .tag-badge { font-family: sans-serif; color: #fff; background: #6c757d; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; }
     </style>
 """,
     unsafe_allow_html=True,
@@ -44,7 +45,7 @@ st.markdown(
 if "df" not in st.session_state:
     st.session_state.df = None
 
-# 4. 側邊欄：設定與匯出
+# 4. 側邊欄
 with st.sidebar:
     st.title("⚙️ 系統設定")
     try:
@@ -70,14 +71,13 @@ with st.sidebar:
             mime="text/csv",
             use_container_width=True,
         )
-        st.info("💡 匯出會包含所有標籤與原始欄位內容。")
 
 # 5. 主畫面
 st.title("🛡️ 學生言論安全審核系統")
 uploaded_file = st.file_uploader("上傳待審核 CSV (支援續作)", type=["csv"])
 
 
-# AI 核心邏輯
+# AI 核心邏輯 (不變)
 def ai_analyze(text, key):
     client = Groq(api_key=key)
     system_ins = 'You are a student safety analyst. Output ONLY JSON: {"target": "T/N/Optional", "subcategory": "H/E/S/V/C/D/""}'
@@ -108,7 +108,6 @@ if uploaded_file:
 
     df = st.session_state.df
 
-    # 批量分析按鈕
     if st.button("🚀 執行 AI 自動預測 (僅針對未標籤項)"):
         if not user_api_key:
             st.warning("請先在左側輸入 API Key 才能執行 AI 分析！")
@@ -129,10 +128,9 @@ if uploaded_file:
 
     st.divider()
 
-    # 7. 渲染卡片 (這部分會自動讀取暫存的內容)
+    # 7. 渲染卡片
     for i in range(len(df)):
         cur_t = df.at[i, "target"]
-        # 決定顏色 class
         card_class = ""
         if cur_t == "T":
             card_class = "card-T"
@@ -146,8 +144,18 @@ if uploaded_file:
 
             c1, c2 = st.columns([4, 1])
             with c1:
+                # 組合 ID 與 原始分類 (subCategories)
+                raw_tags = (
+                    df.at[i, "subCategories"] if "subCategories" in df.columns else ""
+                )
+                tag_html = (
+                    f'<span class="tag-badge">{raw_tags}</span>'
+                    if pd.notna(raw_tags) and raw_tags != ""
+                    else ""
+                )
+
                 st.markdown(
-                    f'<span class="id-badge">ID: {df.at[i, "_id"]}</span>',
+                    f'<div><span class="id-badge">ID: {df.at[i, "_id"]}</span>{tag_html}</div>',
                     unsafe_allow_html=True,
                 )
                 st.markdown(
@@ -156,7 +164,6 @@ if uploaded_file:
                 )
 
             with c2:
-                # 標籤選項
                 t_opts = ["", "T", "N", "Optional"]
                 new_t = st.selectbox(
                     "標籤",
@@ -174,10 +181,9 @@ if uploaded_file:
                     key=f"s_{i}",
                 )
 
-                # 自動更新暫存資料
                 if new_t != df.at[i, "target"] or new_s != df.at[i, "subcategory"]:
                     st.session_state.df.at[i, "target"] = new_t
                     st.session_state.df.at[i, "subcategory"] = new_s
-                    st.rerun()  # 點選後立刻變色
+                    st.rerun()
 
             st.markdown("</div>", unsafe_allow_html=True)
