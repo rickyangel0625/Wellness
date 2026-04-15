@@ -7,7 +7,7 @@ from groq import Groq
 # 1. 頁面配置
 st.set_page_config(page_title="言論審核系統", layout="wide")
 
-# 2. 自定義 CSS (包含顏色樣式與標籤美化)
+# 2. 自定義 CSS (修正顏色邏輯：只有 T/N/Optional 會顯示顏色，其餘為白色)
 st.markdown(
     """
     <style>
@@ -19,18 +19,10 @@ st.markdown(
         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         background-color: #ffffff;
     }
-    .card-T { 
-        border-left-color: #ff4b4b !important; 
-        background-color: rgba(255, 75, 75, 0.1) !important; 
-    }
-    .card-N { 
-        border-left-color: #28a745 !important; 
-        background-color: rgba(40, 167, 69, 0.1) !important; 
-    }
-    .card-Optional { 
-        border-left-color: #8b4513 !important; 
-        background-color: rgba(139, 69, 19, 0.1) !important; 
-    }
+    .card-T { border-left-color: #ff4b4b !important; background-color: rgba(255, 75, 75, 0.1) !important; }
+    .card-N { border-left-color: #28a745 !important; background-color: rgba(40, 167, 69, 0.1) !important; }
+    .card-Optional { border-left-color: #8b4513 !important; background-color: rgba(139, 69, 19, 0.1) !important; }
+    
     .post-text { font-size: 1.15em; line-height: 1.6; color: #1a1a1b; margin-top: 8px; }
     .id-badge { font-family: monospace; color: #555; background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 0.85em; margin-right: 5px; }
     .tag-badge { font-family: sans-serif; color: #fff; background: #6c757d; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; }
@@ -39,13 +31,14 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# 3. 初始化暫存 (df 預設為 None，代表目前沒資料)
+# 3. 初始化暫存
 if "df" not in st.session_state:
     st.session_state.df = None
 
-# 4. 側邊欄：設定與匯出
+# 4. 側邊欄：API Key 與 匯出
 with st.sidebar:
     st.title("⚙️ 系統設定")
+    # 自動嘗試讀取 Secrets
     try:
         default_key = st.secrets["GROQ_API_KEY"]
     except:
@@ -55,48 +48,39 @@ with st.sidebar:
         "輸入 Groq API Key", value=default_key, type="password"
     )
 
+    if not user_api_key and not default_key:
+        st.info("🔑 若要在本地自動讀取，請在 .streamlit/secrets.toml 填入鍵值。")
+
     st.divider()
     st.header("💾 匯出結果")
     if st.session_state.df is not None:
-        # --- 處理匯出邏輯 ---
-        export_df = st.session_state.df.copy()  # 複印一份資料，不影響畫面上顯示的內容
-
-        # 取得台灣時間並格式化
+        export_df = st.session_state.df.copy()
         now_tw = datetime.utcnow() + timedelta(hours=8)
         time_str = now_tw.strftime("%Y-%m-%d %H:%M:%S")
 
-        # 【核心邏輯】只有標籤過的才填入時間戳印
-        export_df["export_time"] = ""  # 先開一個全空的欄位
-        # 定義條件：target 欄位不是空值且不是空字串
-        mask = (export_df["target"].notna()) & (export_df["target"] != "")
-        # 將符合條件的那幾列填入時間
+        export_df["export_time"] = ""
+        mask = (export_df["target"].notna()) & (
+            export_df["target"].isin(["T", "N", "Optional"])
+        )
         export_df.loc[mask, "export_time"] = time_str
 
-        # 生成動態檔名
         orig_name = st.session_state.get("original_filename", "Audit").replace(
             ".csv", ""
         )
         timestamp = now_tw.strftime("%m%d_%H%M")
         final_filename = f"{orig_name}_{timestamp}.csv"
 
-        # 轉換為 CSV 下載格式
         csv_data = export_df.to_csv(index=False, encoding="utf-8-sig")
-
         st.download_button(
-            label="📥 匯出並下載結果 CSV",
+            "📥 匯出並下載 CSV",
             data=csv_data,
             file_name=final_filename,
             mime="text/csv",
             use_container_width=True,
         )
-        st.info(f"💡 僅標籤項會註記時間: {time_str}")
-
-# 5. 主畫面與檔案上傳
-st.title("🛡️ 學生言論安全審核系統")
-uploaded_file = st.file_uploader("上傳待審核 CSV (支援續作)", type=["csv"])
 
 
-# AI 核心分析邏輯
+# AI 分析核心
 def ai_analyze(text, key):
     client = Groq(api_key=key)
     system_ins = 'You are a student safety analyst. Output ONLY JSON: {"target": "T/N/Optional", "subcategory": "H/E/S/V/C/D"}'
@@ -116,13 +100,36 @@ def ai_analyze(text, key):
         return "error", ""
 
 
-# 6. 資料處理
+# 5. 主畫面與檔案上傳
+st.title("🛡️ 學生言論安全審核系統")
+uploaded_file = st.file_uploader("上傳待審核 CSV", type=["csv"])
+
+# 6. 資料處理 (超強防錯讀取邏輯)
 if uploaded_file:
     if st.session_state.df is None:
         st.session_state.original_filename = uploaded_file.name
-        # 讀取 CSV，dtype=str 避免 ID 變成科學記號
-        df = pd.read_csv(uploaded_file, encoding="utf-8-sig", dtype=str)
-        # 確保必要的欄位存在
+
+        # 多重編碼嘗試
+        df = None
+        encodings = ["utf-8-sig", "cp950", "utf-8", "latin1"]
+
+        for enc in encodings:
+            try:
+                uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, encoding=enc, dtype=str)
+                break  # 讀取成功就跳出迴圈
+            except Exception:
+                continue
+
+        # 如果上面都失敗，用最後一招：強制忽略錯誤字元
+        if df is None:
+            uploaded_file.seek(0)
+            df = pd.read_csv(
+                uploaded_file, encoding="utf-8", errors="replace", dtype=str
+            )
+
+        # 欄位補齊與清理
+        df = df.fillna("")
         for col in ["target", "subcategory"]:
             if col not in df.columns:
                 df[col] = ""
@@ -130,43 +137,38 @@ if uploaded_file:
 
     df = st.session_state.df
 
-    # 執行 AI 自動標籤按鈕
-    if st.button("🚀 執行 AI 自動預測 (僅針對未標籤項)"):
+    if st.button("🚀 執行 AI 自動預測"):
         if not user_api_key:
             st.warning("請先輸入 API Key！")
         else:
-            # 找出還沒有被標註 (T/N/Optional) 的行
             todo_list = df[~df["target"].isin(["T", "N", "Optional"])].index
             if len(todo_list) > 0:
                 pbar = st.progress(0)
                 for idx, i in enumerate(todo_list):
                     t, s = ai_analyze(df.at[i, "cleaned_text"], user_api_key)
                     if t != "error":
-                        df.at[i, "target"] = t
-                        df.at[i, "subcategory"] = s
+                        df.at[i, "target"], df.at[i, "subcategory"] = t, s
                     pbar.progress((idx + 1) / len(todo_list))
-                st.session_state.df = df  # 更新暫存
-                st.rerun()  # 重新整理頁面顯示結果
+                st.session_state.df = df
+                st.rerun()
 
     st.divider()
 
-    # 7. 渲染介面卡片
+    # 7. 渲染介面
     for i in range(len(df)):
-        cur_t = df.at[i, "target"]
-        card_class = f"card-{cur_t}" if cur_t in ["T", "N", "Optional"] else ""
+        raw_t = str(df.at[i, "target"]).strip()
+        # 只有在 T, N, Optional 狀態下才顯示顏色 class
+        card_class = f"card-{raw_t}" if raw_t in ["T", "N", "Optional"] else ""
 
         with st.container():
             st.markdown(f'<div class="post-card {card_class}">', unsafe_allow_html=True)
             c1, c2 = st.columns([4, 1])
             with c1:
-                # 顯示原始 CSV 的子標籤 (若有)
                 raw_tags = (
                     df.at[i, "subCategories"] if "subCategories" in df.columns else ""
                 )
                 tag_html = (
-                    f'<span class="tag-badge">{raw_tags}</span>'
-                    if pd.notna(raw_tags) and raw_tags != ""
-                    else ""
+                    f'<span class="tag-badge">{raw_tags}</span>' if raw_tags else ""
                 )
                 st.markdown(
                     f'<div><span class="id-badge">ID: {df.at[i, "_id"]}</span>{tag_html}</div>',
@@ -178,27 +180,27 @@ if uploaded_file:
                 )
 
             with c2:
-                # 手動修改標籤與子類
                 t_opts = ["", "T", "N", "Optional"]
                 new_t = st.selectbox(
                     "標籤",
                     t_opts,
-                    index=t_opts.index(cur_t) if cur_t in t_opts else 0,
+                    index=t_opts.index(raw_t) if raw_t in t_opts else 0,
                     key=f"t_{i}",
                 )
 
+                raw_s = str(df.at[i, "subcategory"]).strip()
                 s_opts = ["", "H", "E", "S", "V", "C", "D"]
-                cur_s = df.at[i, "subcategory"]
                 new_s = st.selectbox(
                     "子類",
                     s_opts,
-                    index=s_opts.index(cur_s) if cur_s in s_opts else 0,
+                    index=s_opts.index(raw_s) if raw_s in s_opts else 0,
                     key=f"s_{i}",
                 )
 
-                # 當使用者在網頁上更改下拉選單時，同步回暫存
                 if new_t != df.at[i, "target"] or new_s != df.at[i, "subcategory"]:
-                    st.session_state.df.at[i, "target"] = new_t
-                    st.session_state.df.at[i, "subcategory"] = new_s
+                    (
+                        st.session_state.df.at[i, "target"],
+                        st.session_state.df.at[i, "subcategory"],
+                    ) = (new_t, new_s)
                     st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
