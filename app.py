@@ -19,7 +19,6 @@ st.markdown(
         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         background-color: #ffffff;
     }
-    /* 顏色樣式 (透明背景 + 實色邊框) */
     .card-T { 
         border-left-color: #ff4b4b !important; 
         background-color: rgba(255, 75, 75, 0.1) !important; 
@@ -32,7 +31,6 @@ st.markdown(
         border-left-color: #8b4513 !important; 
         background-color: rgba(139, 69, 19, 0.1) !important; 
     }
-    
     .post-text { font-size: 1.15em; line-height: 1.6; color: #1a1a1b; margin-top: 8px; }
     .id-badge { font-family: monospace; color: #555; background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 0.85em; margin-right: 5px; }
     .tag-badge { font-family: sans-serif; color: #fff; background: #6c757d; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; }
@@ -41,7 +39,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# 3. 初始化暫存
+# 3. 初始化暫存 (df 預設為 None，代表目前沒資料)
 if "df" not in st.session_state:
     st.session_state.df = None
 
@@ -54,30 +52,34 @@ with st.sidebar:
         default_key = ""
 
     user_api_key = st.text_input(
-        "輸入 Groq API Key",
-        value=default_key,
-        type="password",
+        "輸入 Groq API Key", value=default_key, type="password"
     )
 
     st.divider()
     st.header("💾 匯出結果")
     if st.session_state.df is not None:
         # --- 處理匯出邏輯 ---
-        export_df = st.session_state.df.copy()
+        export_df = st.session_state.df.copy()  # 複印一份資料，不影響畫面上顯示的內容
 
-        # 修正：取得 UTC 時間並手動加 8 小時轉換為台灣時間
+        # 取得台灣時間並格式化
         now_tw = datetime.utcnow() + timedelta(hours=8)
+        time_str = now_tw.strftime("%Y-%m-%d %H:%M:%S")
 
-        # 使用台灣時間新增「匯出時間」欄位
-        export_df["export_time"] = now_tw.strftime("%Y-%m-%d %H:%M:%S")
+        # 【核心邏輯】只有標籤過的才填入時間戳印
+        export_df["export_time"] = ""  # 先開一個全空的欄位
+        # 定義條件：target 欄位不是空值且不是空字串
+        mask = (export_df["target"].notna()) & (export_df["target"] != "")
+        # 將符合條件的那幾列填入時間
+        export_df.loc[mask, "export_time"] = time_str
 
-        # 使用台灣時間生成檔名：原檔名 + _月日_時分
-        orig_name = st.session_state.get(
-            "original_filename", "Audit_Result.csv"
-        ).replace(".csv", "")
+        # 生成動態檔名
+        orig_name = st.session_state.get("original_filename", "Audit").replace(
+            ".csv", ""
+        )
         timestamp = now_tw.strftime("%m%d_%H%M")
         final_filename = f"{orig_name}_{timestamp}.csv"
 
+        # 轉換為 CSV 下載格式
         csv_data = export_df.to_csv(index=False, encoding="utf-8-sig")
 
         st.download_button(
@@ -87,17 +89,17 @@ with st.sidebar:
             mime="text/csv",
             use_container_width=True,
         )
-        st.info(f"💡 預覽檔名: {final_filename}")
+        st.info(f"💡 僅標籤項會註記時間: {time_str}")
 
-# 5. 主畫面
+# 5. 主畫面與檔案上傳
 st.title("🛡️ 學生言論安全審核系統")
 uploaded_file = st.file_uploader("上傳待審核 CSV (支援續作)", type=["csv"])
 
 
-# AI 核心邏輯
+# AI 核心分析邏輯
 def ai_analyze(text, key):
     client = Groq(api_key=key)
-    system_ins = 'You are a student safety analyst. Output ONLY JSON: {"target": "T/N/Optional", "subcategory": "H/E/S/V/C/D/""}'
+    system_ins = 'You are a student safety analyst. Output ONLY JSON: {"target": "T/N/Optional", "subcategory": "H/E/S/V/C/D"}'
     try:
         chat_completion = client.chat.completions.create(
             messages=[
@@ -117,11 +119,10 @@ def ai_analyze(text, key):
 # 6. 資料處理
 if uploaded_file:
     if st.session_state.df is None:
-        # 記錄原始檔名
         st.session_state.original_filename = uploaded_file.name
-
-        # 讀取所有欄位，dtype=str 確保格式不跑掉且保留所有額外欄位
+        # 讀取 CSV，dtype=str 避免 ID 變成科學記號
         df = pd.read_csv(uploaded_file, encoding="utf-8-sig", dtype=str)
+        # 確保必要的欄位存在
         for col in ["target", "subcategory"]:
             if col not in df.columns:
                 df[col] = ""
@@ -129,10 +130,12 @@ if uploaded_file:
 
     df = st.session_state.df
 
+    # 執行 AI 自動標籤按鈕
     if st.button("🚀 執行 AI 自動預測 (僅針對未標籤項)"):
         if not user_api_key:
-            st.warning("請先在左側輸入 API Key 才能執行 AI 分析！")
+            st.warning("請先輸入 API Key！")
         else:
+            # 找出還沒有被標註 (T/N/Optional) 的行
             todo_list = df[~df["target"].isin(["T", "N", "Optional"])].index
             if len(todo_list) > 0:
                 pbar = st.progress(0)
@@ -142,26 +145,21 @@ if uploaded_file:
                         df.at[i, "target"] = t
                         df.at[i, "subcategory"] = s
                     pbar.progress((idx + 1) / len(todo_list))
-                st.session_state.df = df
-                st.rerun()
+                st.session_state.df = df  # 更新暫存
+                st.rerun()  # 重新整理頁面顯示結果
 
     st.divider()
 
-    # 7. 渲染卡片
+    # 7. 渲染介面卡片
     for i in range(len(df)):
         cur_t = df.at[i, "target"]
-        card_class = ""
-        if cur_t == "T":
-            card_class = "card-T"
-        elif cur_t == "N":
-            card_class = "card-N"
-        elif cur_t == "Optional":
-            card_class = "card-Optional"
+        card_class = f"card-{cur_t}" if cur_t in ["T", "N", "Optional"] else ""
 
         with st.container():
             st.markdown(f'<div class="post-card {card_class}">', unsafe_allow_html=True)
             c1, c2 = st.columns([4, 1])
             with c1:
+                # 顯示原始 CSV 的子標籤 (若有)
                 raw_tags = (
                     df.at[i, "subCategories"] if "subCategories" in df.columns else ""
                 )
@@ -180,6 +178,7 @@ if uploaded_file:
                 )
 
             with c2:
+                # 手動修改標籤與子類
                 t_opts = ["", "T", "N", "Optional"]
                 new_t = st.selectbox(
                     "標籤",
@@ -197,6 +196,7 @@ if uploaded_file:
                     key=f"s_{i}",
                 )
 
+                # 當使用者在網頁上更改下拉選單時，同步回暫存
                 if new_t != df.at[i, "target"] or new_s != df.at[i, "subcategory"]:
                     st.session_state.df.at[i, "target"] = new_t
                     st.session_state.df.at[i, "subcategory"] = new_s
